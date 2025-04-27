@@ -1,0 +1,332 @@
+/* Calendar.css */
+
+:root {
+  --primary-color: #4285f4;
+  --secondary-color: #34a853;
+  --warning-color: #fbbc05;
+  --danger-color: #ea4335;
+  --light-color: #f8f9fa;
+  --dark-color: #202124;
+  --gray-color: #5f6368;
+  --purple-color: #9c27b0;
+  --orange-color: #ff5722;
+  --border-radius: 8px;
+  --box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  --transition: all 0.3s ease;
+}
+
+/* Modern card styling */
+.modern-card {
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  border: none;
+  transition: var(--transition);
+}
+
+.modern-card:hover {
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+
+.modern-card .card-header {
+  background-color: white;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  padding: 1rem 1.25rem;
+}
+
+.modern-card .card-body {
+  padding: 1.25rem;
+}
+
+/* Dashboard container */
+.dashboard-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Dashboard controls */
+.dashboard-controls {
+  background-color: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.filter-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 250px;
+}
+
+.filter-label {
+  font-weight: 500;
+  margin-right: 0.75rem;
+  white-space: nowrap;
+}
+
+.filter-select {
+  flex: 1;
+  border-radius: 20px;
+  border: 1px solid var(--gray-light);
+  padding: 0.5rem 1rem;
+}
+
+.toggle-group {
+  display: flex;
+  align-items: center;
+  margin-right: 1rem;
+}
+
+.refresh-button {
+  border-radius: 20px;
+  padding: 0.5rem 1.25rem;
+  font-weight: 500;
+  transition: var(--transition);
+  border: none;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.refresh-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.legend-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-right: 1rem;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  margin-right: 0.5rem;
+}
+
+.legend-label {
+  font-size: 0.85rem;
+  color: var(--gray-color);
+}
+
+.filter-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  color: var(--gray-color);
+  font-size: 0.85rem;
+}
+
+/* Dashboard content */
+.dashboard-content {
+  display: flex;
+  flex: 1;
+  gap: 1.5rem;
+}
+
+.calendar-container {
+  flex: 1;
+  transition: var(--transition);
+}
+
+.calendar-container.with-sidebar {
+  width: 65%;
+}
+
+.calendar-wrapper {
+  background-color: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  padding: 1rem;
+  height: calc(100vh - 220px);
+  overflow: hidden;
+}
+
+/* Task details panel styling */
+.task-details-panel {
+  width: 35%;
+  transition: var(--transition);
+}
+
+.task-details-card {
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  border: none;
+  transition: var(--transition);
+  background-color: white;
+  height: calc(100vh - 220px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.task-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.task-details-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.task-details-section {
+  margin-bottom: 1.5rem;
+}
+
+.task-details-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  color: var(--dark-color);
+}
+
+.task-property {
+  display: flex;
+  margin-bottom: 0.5rem;
+}
+
+.task-property-label {
+  font-weight: 500;
+  min-width: 120px;
+  color: var(--gray-color);
+}
+
+.task-property-value {
+  flex: 1;
+}
+
+/* Custom colors for conflict indicators */
+.text-purple {
+  color: var(--purple-color) !important;
+}
+
+.text-orange {
+  color: var(--orange-color) !important;
+}
+
+.alert-purple {
+  background-color: rgba(156, 39, 176, 0.1);
+  border-color: rgba(156, 39, 176, 0.2);
+  color: var(--purple-color);
+}
+
+.alert-orange {
+  background-color: rgba(255, 87, 34, 0.1);
+  border-color: rgba(255, 87, 34, 0.2);
+  color: var(--orange-color);
+}
+
+/* Hover effect for calendar events */
+.fc-event {
+  cursor: pointer;
+  transition: transform 0.2s ease-in-out;
+  border-radius: 4px;
+  border: none !important;
+  padding: 2px 4px;
+}
+
+.fc-event:hover {
+  transform: scale(1.02);
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Status badges */
+.status-badge {
+  padding: 0.35em 0.65em;
+  font-size: 0.75em;
+  font-weight: 500;
+  border-radius: 30px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Modern buttons */
+.btn-modern {
+  border-radius: 30px;
+  padding: 0.5rem 1.25rem;
+  font-weight: 500;
+  transition: var(--transition);
+  border: none;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.btn-modern:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-modern:active {
+  transform: translateY(0);
+}
+
+/* Responsive adjustments */
+@media (max-width: 992px) {
+  .dashboard-content {
+    flex-direction: column;
+  }
+  
+  .calendar-container.with-sidebar {
+    width: 100%;
+  }
+  
+  .task-details-panel {
+    width: 100%;
+    margin-top: 1.5rem;
+  }
+  
+  .task-details-card {
+    height: auto;
+    max-height: 500px;
+  }
+}
+
+@media (max-width: 768px) {
+  .filter-controls {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .filter-group {
+    width: 100%;
+  }
+  
+  .toggle-group {
+    margin: 0.5rem 0;
+  }
+  
+  .task-property {
+    flex-direction: column;
+  }
+  
+  .task-property-label {
+    margin-bottom: 0.25rem;
+  }
+}

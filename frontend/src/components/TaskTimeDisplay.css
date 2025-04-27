@@ -1,0 +1,36 @@
+.task-time-display {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin-bottom: 8px;
+  border-left: 3px solid #6c757d;
+  padding-left: 8px;
+}
+
+.time-range-line {
+  margin-bottom: 2px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background-color 0.2s;
+}
+
+.time-range-line:hover {
+  background-color: #f8f9fa;
+}
+
+.duration-line {
+  margin-top: 4px;
+  font-weight: bold;
+  color: #495057;
+}
+
+.work-hours-note {
+  font-style: italic;
+  color: #6c757d;
+  font-size: 0.85rem;
+  margin-top: 2px;
+}
+
+/* Clock emoji styling */
+.task-time-display .time-range-line span.clock-emoji {
+  margin-right: 4px;
+  display: inline-block;
+}

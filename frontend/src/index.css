@@ -1,0 +1,76 @@
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+.task-progress-bar {
+  height: 20px;
+  width: 100%;
+  background-color: #e9ecef;
+  border-radius: 0.25rem;
+  position: relative;
+}
+
+.task-progress-fill {
+  height: 100%;
+  border-radius: 0.25rem;
+  transition: width 0.3s ease;
+}
+
+.task-progress-text {
+  position: absolute;
+  width: 100%;
+  text-align: center;
+  color: #000;
+  font-weight: bold;
+  line-height: 20px;
+}
+
+.gantt-container {
+  height: 600px;
+  width: 100%;
+}
+
+.fc-event {
+  cursor: pointer;
+}
+
+.log-panel {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  padding: 8px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+}
+
+.log-entry-change {
+  background-color: #e6f7ff;
+}
+
+.log-entry-pause {
+  background-color: #fff7e6;
+}
+
+.task-on-time {
+  background-color: #d4edda;
+}
+
+.task-delayed {
+  background-color: #f8d7da;
+}
+
+.task-early {
+  background-color: #cce5ff;
+}
