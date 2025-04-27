@@ -96,20 +96,7 @@ This project provides a visual interface to interact with the scheduling and res
    ```
    This will start the React development server on http://localhost:3000
 
-### Option 2: Running Both Together
 
-If you have both Python and Node.js installed, you can run the backend and frontend with a single command from the project root:
-
-```bash
-cd src
-python api.py
-```
-
-And in another terminal:
-```bash
-cd frontend
-npm start
-```
 
 ## Database Configuration
 
@@ -130,21 +117,7 @@ conn = psycopg2.connect(
 )
 ```
 
-### Updating the Database Schema
 
-If you need to update the database schema or want to generate a new setup.sql file from an existing database, you can use the provided script:
-
-```bash
-python src/check_schema.py
-```
-
-This script will:
-1. Connect to your PostgreSQL database
-2. Extract the schema and data from all tables
-3. Generate a new setup.sql file with CREATE TABLE and INSERT statements
-4. Save it to src/database/setup.sql
-
-You can then use this file to recreate the database on another system.
 
 ## API Endpoints
 
