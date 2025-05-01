@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  rso-postgres:
+    image: postgres:12
+    container_name: rso-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: RSO
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    volumes:
+      - ./src/database/setup.sql:/docker-entrypoint-initdb.d/setup.sql
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rso-flask:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: rso-flask
+    restart: always
+    ports:
+      - "5000:5000"
+    depends_on:
+      rso-postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=rso-postgres
+      - DB_NAME=RSO
+      - DB_USER=postgres
+      - DB_PASSWORD=root
+
+  rso-react:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: rso-react
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - rso-flask
+
+volumes:
+  postgres_data:

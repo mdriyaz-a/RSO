@@ -4,6 +4,7 @@ from flask_cors import CORS
 import sys
 import os
 import json
+import traceback
 from datetime import datetime, timedelta
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -18,10 +19,10 @@ CORS(app)  # Enable CORS for all routes
 # Database connection helper
 def get_db_connection():
     conn = psycopg2.connect(
-        dbname='rso',
-        user='postgres',
-        password='root',
-        host='localhost'
+        dbname=os.environ.get('DB_NAME', 'rso'),
+        user=os.environ.get('DB_USER', 'postgres'),
+        password=os.environ.get('DB_PASSWORD', 'root'),
+        host=os.environ.get('DB_HOST', 'localhost')
     )
     conn.autocommit = True
     return conn
@@ -2966,7 +2967,7 @@ def reschedule_after_assignment_change():
         # Get task details
         cur.execute("""
             SELECT t.task_id, t.task_name, t.estimated_hours, t.priority, t.phase,
-                   s.planned_start, s.planned_end, s.status
+                   s.status, s.planned_start, s.planned_end
             FROM tasks t
             JOIN schedules s ON t.task_id = s.task_id
             WHERE t.task_id = %s
@@ -3394,4 +3395,5 @@ def check_resource_conflicts(conn, task_id, resource_id=None, employee_id=None):
         cur.close()
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Use 0.0.0.0 to make the server accessible externally
+    app.run(debug=True, host='0.0.0.0', port=5000)
