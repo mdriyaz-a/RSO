@@ -239,7 +239,7 @@ If you've made changes and want to push them to GitHub, follow these steps:
 
 3. **Push to GitHub**:
    ```bash
-   git push -u origin master
+   git push -u origin main
    ```
    (Use `master` instead of `main` if that's your default branch)
 
@@ -247,7 +247,7 @@ If you've made changes and want to push them to GitHub, follow these steps:
 
 1. **Pull the latest changes first**:
    ```bash
-   git pull origin master
+   git pull origin main
    ```
 
 2. **Then add, commit, and push your changes as shown above**
