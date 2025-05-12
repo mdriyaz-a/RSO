@@ -18,10 +18,10 @@ CORS(app)  # Enable CORS for all routes
 # Database connection helper
 def get_db_connection():
     conn = psycopg2.connect(
-        dbname='rso',
+        dbname='RSO',
         user='postgres',
         password='root',
-        host='localhost'
+        host='db'  # This refers to the service name in docker-compose
     )
     conn.autocommit = True
     return conn

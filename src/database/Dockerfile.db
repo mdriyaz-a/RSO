@@ -1,0 +1,5 @@
+FROM postgres:13
+
+COPY setup.sql /docker-entrypoint-initdb.d/
+
+# PostgreSQL's docker image automatically executes .sql files in /docker-entrypoint-initdb.d/ on initialization
