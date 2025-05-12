@@ -189,12 +189,32 @@ function Dashboard() {
   const runInitialSchedule = async () => {
     try {
       setLoading(true);
-      await axios.post('/api/schedule');
+      // Show a message to the user that the scheduler is running
+      alert('Running initial scheduler. This may take a few moments...');
+      
+      // Call the API to run the initial scheduler with proper content type
+      await axios.post('/api/schedule', {}, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Fetch the updated schedules and dependencies
       await fetchSchedules();
       await fetchTaskDependencies();
-      // viewMode dropdown removed
+      
+      // Show success message
+      alert('Initial schedule completed successfully!');
     } catch (error) {
       console.error('Error running initial schedule:', error);
+      
+      // Get a more detailed error message if available
+      let errorMessage = 'Error running initial schedule.';
+      if (error.response && error.response.data && error.response.data.error) {
+        errorMessage += ' ' + error.response.data.error;
+      }
+      
+      alert(errorMessage + ' Please check the console for details.');
       setLoading(false);
     }
   };
@@ -453,6 +473,26 @@ function Dashboard() {
       setLoading(true);
       console.log('Clocking in task:', task.task_id);
       
+      // Initialize the timer for this task if it doesn't exist
+      if (!window.taskTimers) {
+        window.taskTimers = {};
+      }
+      
+      if (!window.taskTimers[task.task_id]) {
+        window.taskTimers[task.task_id] = {
+          accumulatedTime: 0,
+          lastClockInTime: null,
+          isRunning: false
+        };
+      }
+      
+      // Set the clock-in time and mark as running
+      window.taskTimers[task.task_id].lastClockInTime = new Date();
+      window.taskTimers[task.task_id].isRunning = true;
+      
+      console.log(`Dashboard - Clocking in task ${task.task_id}`);
+      console.log(`Dashboard - Accumulated time: ${window.taskTimers[task.task_id].accumulatedTime} seconds`);
+      
       const response = await axios.post('/api/reschedule/event', {
         task_id: task.task_id,
         event_type: 'clock_in',
@@ -515,6 +555,22 @@ function Dashboard() {
       setShowClockOutModal(false);
       
       console.log('Clocking out task:', selectedTask.task_id);
+      
+      // Ensure we properly handle the timer state when clocking out
+      if (window.taskTimers && window.taskTimers[selectedTask.task_id]) {
+        const taskTimer = window.taskTimers[selectedTask.task_id];
+        
+        // If the timer is running, calculate and store the accumulated time
+        if (taskTimer.isRunning && taskTimer.lastClockInTime) {
+          const sessionTime = Math.floor((new Date() - taskTimer.lastClockInTime) / 1000);
+          taskTimer.accumulatedTime = (taskTimer.accumulatedTime || 0) + sessionTime;
+          taskTimer.isRunning = false;
+          taskTimer.lastClockInTime = null;
+          
+          console.log(`Dashboard - Clocking out task ${selectedTask.task_id}`);
+          console.log(`Dashboard - Final accumulated time: ${taskTimer.accumulatedTime} seconds`);
+        }
+      }
       
       const response = await axios.post('/api/reschedule/event', {
         task_id: selectedTask.task_id,
@@ -803,9 +859,9 @@ function Dashboard() {
               <Tab.Content>
                 <Tab.Pane eventKey="employee">
                   {resourceAssignments.employee_conflicts.length > 0 ? (
-                    <div className="table-responsive">
+                    <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                       <Table striped bordered hover>
-                        <thead>
+                        <thead style={{ position: 'sticky', top: 0, background: 'white', zIndex: 1 }}>
                           <tr>
                             <th>Employee</th>
                             <th>Task 1</th>
@@ -928,9 +984,9 @@ function Dashboard() {
                 </Tab.Pane>
                 <Tab.Pane eventKey="resource">
                   {resourceAssignments.resource_conflicts.length > 0 ? (
-                    <div className="table-responsive">
+                    <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                       <Table striped bordered hover>
-                        <thead>
+                        <thead style={{ position: 'sticky', top: 0, background: 'white', zIndex: 1 }}>
                           <tr>
                             <th>Resource</th>
                             <th>Task 1</th>
@@ -1206,7 +1262,7 @@ function Dashboard() {
                   disabled={loading}
                   className="w-100"
                 >
-                  Run Initial Schedule
+                  {loading ? 'Running Scheduler...' : 'Run Initial Schedule'}
                 </Button>
               </div>
             </div>

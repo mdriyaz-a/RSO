@@ -359,7 +359,7 @@ body {
 /* Main Content Styles */
 .main-content {
   flex: 1;
-  margin-left: var(--sidebar-width);
+  /* Removed margin-left to fix the gap */
   transition: var(--transition);
   min-height: 100vh;
   display: flex;
@@ -369,14 +369,14 @@ body {
   right: 0;
   bottom: 0;
   left: var(--sidebar-width);
-  will-change: margin-left, left;
+  will-change: left;
   transform: translateZ(0);
   backface-visibility: hidden;
   overflow: hidden; /* Prevent scrolling on the main-content container */
 }
 
 .main-content.expanded {
-  margin-left: var(--sidebar-collapsed-width);
+  /* Removed margin-left to fix the gap */
   left: var(--sidebar-collapsed-width);
   transition: var(--transition);
 }

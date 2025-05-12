@@ -9,7 +9,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # Import our existing modules
-from main import DatabaseManager, cp_sat_scheduler, working_time_to_datetime, auto_assign_resources_to_tasks
+from initial_scheduler import DatabaseManager, cp_sat_scheduler, working_time_to_datetime, auto_assign_resources_to_tasks
 from rescheduler import handle_event, get_task_details
 
 app = Flask(__name__)
@@ -18,10 +18,10 @@ CORS(app)  # Enable CORS for all routes
 # Database connection helper
 def get_db_connection():
     conn = psycopg2.connect(
-        dbname='RSO',
+        dbname='rso01',
         user='postgres',
         password='root',
-        host='db'  # This refers to the service name in docker-compose
+        host='localhost'
     )
     conn.autocommit = True
     return conn
@@ -448,7 +448,7 @@ def auto_assign_resources_endpoint():
     }
     """
     try:
-        # Call the auto-assign function from main.py
+        # Call the auto-assign function from initial_scheduler.py
         success = auto_assign_resources_to_tasks()
         
         if success:
@@ -799,11 +799,17 @@ def run_schedule():
     """
     try:
         # Get optional parameters from request
-        data = request.json or {}
+        # Use get_json with silent=True to avoid errors if no JSON is provided
+        data = request.get_json(silent=True) or {}
         
-        # Try to run the scheduler, but if it fails, generate a sample schedule
+        # Run the full initial scheduler
         try:
+            print("Running CP-SAT scheduler...")
+            # The cp_sat_scheduler function already calls auto_assign_resources_to_tasks internally
+            # so we only need to call it once
             cp_sat_scheduler()
+            
+            print("Initial scheduling completed successfully")
         except Exception as scheduler_error:
             print(f"Scheduler error: {scheduler_error}")
             import traceback
@@ -876,6 +882,15 @@ def run_schedule():
             
             conn.commit()
             cur.close()
+            
+            # Try to auto-assign resources even for the fallback schedule
+            try:
+                print("Auto-assigning resources to fallback schedule...")
+                # Make sure we're not clearing existing assignments since we just created them
+                auto_assign_resources_to_tasks(clear_existing=False)
+            except Exception as assign_error:
+                print(f"Error auto-assigning resources to fallback schedule: {assign_error}")
+                traceback.print_exc()
         
         # Fetch the generated schedule from the database
         conn = get_db_connection()
@@ -908,15 +923,6 @@ def run_schedule():
         
         cur.close()
         conn.close()
-        
-        # Auto-assign resources and employees to tasks
-        try:
-            # Call the auto-assign function from main.py
-            auto_assign_resources_to_tasks()
-        except Exception as assign_error:
-            print(f"Error auto-assigning resources: {assign_error}")
-            import traceback
-            traceback.print_exc()
         
         return jsonify(schedules)
     
@@ -3082,7 +3088,7 @@ def run_partial_reschedule():
         # 3. Call the CP-SAT scheduler with a flag to only reschedule specific tasks
         try:
             # Import the scheduler function
-            from main import cp_sat_scheduler
+            from initial_scheduler import cp_sat_scheduler
             
             # Run the scheduler with the list of tasks to preserve
             cp_sat_scheduler(preserve_task_ids=preserved_task_ids)

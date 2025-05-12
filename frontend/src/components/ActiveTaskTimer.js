@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Badge } from 'react-bootstrap';
 
+// Ensure the global taskTimers object exists
+if (!window.taskTimers) {
+  window.taskTimers = {};
+}
+
 function ActiveTaskTimer({ tasks }) {
   const [activeTask, setActiveTask] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -17,46 +22,47 @@ function ActiveTaskTimer({ tasks }) {
     setActiveTask(activeTask);
     
     if (activeTask) {
-      console.log('ActiveTaskTimer - Found active task:', activeTask);
+      const taskId = activeTask.task_id;
+      console.log('ActiveTaskTimer - Found active task:', activeTask.task_name, taskId);
       
-      // Get start time
-      let startTime;
-      if (activeTask.actual_start_iso) {
-        startTime = new Date(activeTask.actual_start_iso);
-      } else if (activeTask.actual_start) {
-        if (activeTask.actual_start instanceof Date) {
-          startTime = activeTask.actual_start;
-        } else if (typeof activeTask.actual_start === 'string') {
-          startTime = new Date(activeTask.actual_start);
+      // Initialize this task's timer if it doesn't exist
+      if (!window.taskTimers[taskId]) {
+        window.taskTimers[taskId] = {
+          accumulatedTime: 0,
+          lastClockInTime: null,
+          isRunning: false
+        };
+      }
+      
+      // If task is active but timer isn't running, start it
+      if (!window.taskTimers[taskId].isRunning) {
+        console.log(`ActiveTaskTimer - Starting timer for task ${taskId}`);
+        window.taskTimers[taskId].lastClockInTime = new Date();
+        window.taskTimers[taskId].isRunning = true;
+      }
+      
+      // Set up timer to update every second
+      const timerId = setInterval(() => {
+        if (window.taskTimers[taskId] && window.taskTimers[taskId].lastClockInTime) {
+          const currentSessionTime = Math.floor((new Date() - window.taskTimers[taskId].lastClockInTime) / 1000);
+          const totalTime = (window.taskTimers[taskId].accumulatedTime || 0) + currentSessionTime;
+          setElapsedTime(totalTime);
         }
+      }, 1000);
+      
+      // Initial calculation
+      if (window.taskTimers[taskId].lastClockInTime) {
+        const currentSessionTime = Math.floor((new Date() - window.taskTimers[taskId].lastClockInTime) / 1000);
+        const totalTime = (window.taskTimers[taskId].accumulatedTime || 0) + currentSessionTime;
+        console.log(`ActiveTaskTimer - Task ${taskId} accumulated time:`, window.taskTimers[taskId].accumulatedTime);
+        console.log(`ActiveTaskTimer - Task ${taskId} current session:`, currentSessionTime);
+        console.log(`ActiveTaskTimer - Task ${taskId} total time:`, totalTime);
+        setElapsedTime(totalTime);
+      } else {
+        setElapsedTime(window.taskTimers[taskId].accumulatedTime || 0);
       }
       
-      if (startTime && !isNaN(startTime.getTime())) {
-        // Calculate initial elapsed time from the original start time
-        const now = new Date();
-        const initialElapsed = Math.floor((now - startTime) / 1000);
-        console.log('ActiveTaskTimer - Initial elapsed time:', initialElapsed, 'seconds');
-        
-        // Ensure we don't have negative elapsed time
-        setElapsedTime(initialElapsed > 0 ? initialElapsed : 0);
-        
-        // Set up timer to update every second
-        const timerId = setInterval(() => {
-          setElapsedTime(prev => prev + 1);
-        }, 1000);
-        
-        return () => clearInterval(timerId);
-      } else {
-        // If we can't determine the start time, just start the timer from now
-        console.log('ActiveTaskTimer - Starting timer from now');
-        setElapsedTime(0);
-        
-        const timerId = setInterval(() => {
-          setElapsedTime(prev => prev + 1);
-        }, 1000);
-        
-        return () => clearInterval(timerId);
-      }
+      return () => clearInterval(timerId);
     } else {
       setElapsedTime(0);
     }

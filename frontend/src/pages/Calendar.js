@@ -61,6 +61,8 @@ function Calendar() {
             slotMinTime: '08:00:00',
             slotMaxTime: '20:00:00',
             height: 'auto',
+            handleWindowResize: true,
+            windowResizeDelay: 100,
             eventClick: handleEventClick
           });
           
@@ -608,9 +610,18 @@ function Calendar() {
     setSelectedTask(null);
   };
 
-  // Debug selected task state
+  // Debug selected task state and resize calendar when sidebar is toggled
   useEffect(() => {
     console.log('Selected task state changed:', selectedTask);
+    
+    // Resize the calendar whenever the sidebar state changes (opened or closed)
+    if (calendarInstance.current) {
+      // Add a small delay to allow the DOM to update first
+      setTimeout(() => {
+        calendarInstance.current.updateSize();
+        console.log('Calendar resized after sidebar state changed');
+      }, 100);
+    }
   }, [selectedTask]);
 
   return (

@@ -147,6 +147,7 @@
 .calendar-container {
   flex: 1;
   transition: var(--transition);
+  width: 100%; /* Ensure it takes full width when no sidebar */
 }
 
 .calendar-container.with-sidebar {
@@ -159,7 +160,8 @@
   box-shadow: var(--box-shadow);
   padding: 1rem;
   height: calc(100vh - 220px);
-  overflow: hidden;
+  overflow: auto; /* Allow scrolling */
+  width: 100%; /* Ensure it takes full width */
 }
 
 /* Task details panel styling */
