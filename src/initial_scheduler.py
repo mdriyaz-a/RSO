@@ -19,17 +19,7 @@ WORKING_HORIZON = HORIZON_DAYS * UNITS_PER_DAY
 
 # Database connection parameters
 DB_PARAMS = {
-    'dbname': 'rso',
-    'user': 'postgres',
-    'password': 'root',
-    'host': 'localhost'
-}
-
-# ---------------------------
-# Database connection details
-# ---------------------------
-DB_PARAMS = {
-    'dbname': 'rso',
+    'dbname': 'rso01',
     'user': 'postgres',
     'password': 'root',
     'host': 'localhost'

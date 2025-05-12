@@ -3,11 +3,12 @@ import psycopg2
 from datetime import datetime, timedelta, date, time
 import sys
 import math
+import json
 import time as time_module
 from ortools.sat.python import cp_model
 
 # Import common utilities from main.py
-from main import (
+from initial_scheduler import (
     DatabaseManager, 
     ConstructionScheduler,
     working_time_to_datetime,
@@ -1872,9 +1873,17 @@ class ReschedulingManager:
             current_time = datetime.now()
             cur.execute("""
                 INSERT INTO optimization_history
-                (optimization_time, project_id, reason, num_tasks)
-                VALUES (%s, %s, 'Full reoptimization', %s)
-            """, (current_time, project_id, len(task_ids)))
+                (tenant_id, project_id, optimization_type, start_time, end_time, status, affected_tasks)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                1,  # Default tenant_id
+                project_id, 
+                'Full reoptimization', 
+                current_time, 
+                current_time, 
+                'Completed', 
+                json.dumps({'task_count': len(task_ids)})
+            ))
             
             self.db.conn.commit()
             
