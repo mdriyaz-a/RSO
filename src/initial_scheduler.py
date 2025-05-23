@@ -19,7 +19,7 @@ WORKING_HORIZON = HORIZON_DAYS * UNITS_PER_DAY
 
 # Database connection parameters
 DB_PARAMS = {
-    'dbname': 'rso01',
+    'dbname': 'og1',
     'user': 'postgres',
     'password': 'root',
     'host': 'localhost'
@@ -302,21 +302,60 @@ class DatabaseManager:
             # Continue without dependencies if there's an error
         
         # Get required employees
-        cur.execute("SELECT task_id, resource_group, resource_count FROM task_required_employees;")
-        for tid, group, count in cur.fetchall():
-            tid = int(tid)
-            if tid in tasks:
-                tasks[tid]['employees'][group] = count
+        print("Fetching employee requirements from database...")
+        try:
+            cur.execute("SELECT task_id, resource_group, resource_count FROM task_required_employees;")
+            employee_reqs = cur.fetchall()
+            print(f"Found {len(employee_reqs)} employee requirements in the database")
+            
+            # Get all unique employee groups
+            cur.execute("SELECT DISTINCT resource_group FROM task_required_employees;")
+            unique_groups = [row[0] for row in cur.fetchall()]
+            print(f"Unique employee groups in requirements: {unique_groups}")
+            
+            # Count requirements by group
+            for group in unique_groups:
+                cur.execute("SELECT COUNT(*) FROM task_required_employees WHERE resource_group = %s;", (group,))
+                count = cur.fetchone()[0]
+                print(f"  Group '{group}' is required by {count} tasks")
+            
+            for tid, group, count in employee_reqs:
+                tid = int(tid)
+                if tid in tasks:
+                    tasks[tid]['employees'][group] = count
+                    print(f"Added employee requirement to task {tid}: {group} x {count}")
+                else:
+                    print(f"Warning: Employee requirement for non-existent task {tid}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error fetching employee requirements: {e}", file=sys.stderr)
+            traceback.print_exc()
         
         # Get required resources
+        print("Fetching resource requirements from database...")
         cur.execute("SELECT task_id, resource_category, resource_count FROM task_required_resources;")
-        for tid, category, count in cur.fetchall():
+        resource_reqs = cur.fetchall()
+        print(f"Found {len(resource_reqs)} resource requirements in the database")
+        
+        for tid, category, count in resource_reqs:
             tid = int(tid)
             if tid in tasks:
                 tasks[tid]['resources'][category] = count
+                print(f"Added resource requirement to task {tid}: {category} x {count}")
+            else:
+                print(f"Warning: Resource requirement for non-existent task {tid}", file=sys.stderr)
+        
+        # Print summary of tasks with resource and employee requirements
+        tasks_list = list(tasks.values())
+        tasks_with_resources = sum(1 for t in tasks_list if t['resources'])
+        tasks_with_employees = sum(1 for t in tasks_list if t['employees'])
+        
+        print(f"\nTask requirements summary:")
+        print(f"  Total tasks: {len(tasks_list)}")
+        print(f"  Tasks with resource requirements: {tasks_with_resources}")
+        print(f"  Tasks with employee requirements: {tasks_with_employees}")
         
         cur.close()
-        return list(tasks.values())
+        return tasks_list
     
     def get_resource_availability(self, resource_category):
         cur = self.conn.cursor()
@@ -440,6 +479,15 @@ class ConstructionScheduler:
         self.dependency_map = {}  # Map: (task_id, dep_task_id) -> {'lag_hours': lag, 'type': dep_type}
         self.preserve_task_ids = preserve_task_ids or []
         
+        # For integrated resource assignment
+        self.resource_assignments = {}  # Map: task_id -> {resource_category: [resource_ids]}
+        self.employee_assignments = {}  # Map: task_id -> {employee_group: [employee_ids]}
+        self.resource_availability = {}  # Map: resource_id -> list of interval vars (when resource is used)
+        self.employee_availability = {}  # Map: employee_id -> list of interval vars (when employee is used)
+        
+        # Load available resources and employees from database
+        self._load_resources_and_employees()
+        
         # Get preserved task schedules from database if needed
         self.preserved_tasks = {}
         if self.preserve_task_ids:
@@ -459,8 +507,10 @@ class ConstructionScheduler:
         self._create_task_vars()
         self._add_dependency_constraints()
         self._add_phase_constraints()
-        self._add_resource_constraints()
-        self._add_employee_constraints()
+        
+        # Use integrated resource and employee constraints
+        self._add_integrated_resource_constraints()
+        self._add_integrated_employee_constraints()
         
         # Add constraints for preserved tasks if any
         if self.preserve_task_ids:
@@ -491,7 +541,8 @@ class ConstructionScheduler:
                 'end': end,
                 'interval': interval,
                 'phase': task['phase'],
-                'priority': priority
+                'priority': priority,
+                'duration': duration  # Store the duration value
             }
             
     def _add_priority_objective(self):
@@ -659,78 +710,373 @@ class ConstructionScheduler:
                     tid = task['task_id']
                     self.model.Add(self.task_vars[tid]['start'] >= phase_ends[prev_phase])
 
-    def _add_resource_constraints(self):
-        # Build cumulative constraints for resources.
+    def _add_integrated_resource_constraints(self):
+        """
+        Build resource constraints with integrated resource assignment.
+        This ensures that specific resources are assigned to tasks during scheduling.
+        """
         resource_dict = {}
         resource_warnings = set()  # Track which resources have warnings
         
+        # Initialize resource assignments for each task
         for task in self.tasks:
             tid = task['task_id']
-            for res_cat, count in task['resources'].items():
-                if res_cat not in resource_dict:
-                    capacity = self.db.get_resource_availability(res_cat)
-                    if capacity <= 0:
-                        # Track this resource category as having a warning
-                        resource_warnings.add(res_cat)
-                        # Set a minimum capacity of 1 to avoid infeasible models
-                        capacity = 1
-                        print(f"Warning: No available resources for {res_cat}. Setting minimum capacity of 1.", file=sys.stderr)
-                    resource_dict[res_cat] = {'intervals': [], 'demands': [], 'capacity': capacity}
-                
-                # Check if the demand exceeds capacity
-                if count > resource_dict[res_cat]['capacity']:
-                    print(f"Warning: Task {tid} requires {count} of resource {res_cat}, but only {resource_dict[res_cat]['capacity']} available.", file=sys.stderr)
-                    # Adjust the demand to the maximum available to ensure feasibility
-                    count = resource_dict[res_cat]['capacity']
-                
-                resource_dict[res_cat]['intervals'].append(self.task_vars[tid]['interval'])
-                resource_dict[res_cat]['demands'].append(count)
+            self.resource_assignments[tid] = {}
         
-        for res_cat, data in resource_dict.items():
-            # Add the cumulative constraint to ensure resource capacity is never exceeded
-            self.model.AddCumulative(data['intervals'], data['demands'], data['capacity'])
-            status = " (WARNING: insufficient resources available)" if res_cat in resource_warnings else ""
-            print(f"Added resource constraint for {res_cat}: capacity = {data['capacity']}{status}", file=sys.stderr)
-
-    def _add_employee_constraints(self):
-        """
-        Build cumulative constraints for employees.
-        This ensures that at any point in time, the total number of employees
-        of a given group used by all tasks does not exceed the available capacity.
-        """
-        employee_dict = {}
+        # First pass: collect resource requirements and check availability
+        print(f"Processing {len(self.tasks)} tasks for resource assignment")
+        processed_tasks = 0
+        tasks_with_resources = 0
         
-        # First, collect all the intervals and demands for each employee group
+        # Count tasks with resource requirements
+        for task in self.tasks:
+            if 'resources' in task and task['resources']:
+                tasks_with_resources += 1
+        
+        print(f"Found {tasks_with_resources} tasks with resource requirements")
+        
         for task in self.tasks:
             tid = task['task_id']
-            for group, count in task['employees'].items():
-                if group not in employee_dict:
-                    capacity = self.db.get_employee_availability(group)
-                    if capacity <= 0:
-                        print(f"Warning: No available employees for group {group}", file=sys.stderr)
-                        continue
-                    employee_dict[group] = {'intervals': [], 'demands': [], 'capacity': capacity}
-                
-                # Add this task's interval and demand to the group
-                employee_dict[group]['intervals'].append(self.task_vars[tid]['interval'])
-                employee_dict[group]['demands'].append(count)
-        
-        # Now add the cumulative constraints for each employee group
-        for group, data in employee_dict.items():
-            # Ensure we have at least one interval and demand
-            if not data['intervals'] or not data['demands']:
+            if 'resources' not in task or not task['resources']:
+                print(f"Task {tid} has no resource requirements, skipping resource assignment")
                 continue
                 
-            # Add the cumulative constraint to ensure employee capacity is never exceeded
-            self.model.AddCumulative(data['intervals'], data['demands'], data['capacity'])
-            print(f"Added employee constraint for {group}: capacity = {data['capacity']}", file=sys.stderr)
+            processed_tasks += 1
+            print(f"Processing resource requirements for Task {tid}: {task['resources']} ({processed_tasks}/{tasks_with_resources})")
             
-            # Add additional constraints to ensure no overallocation
-            # This is a redundant constraint but helps the solver
-            for i in range(len(data['intervals'])):
-                # Ensure each individual demand doesn't exceed capacity
-                self.model.Add(data['demands'][i] <= data['capacity'])
+            for res_cat, count in task['resources'].items():
+                # Skip if no resources of this type are available
+                if res_cat not in self.resource_availability or not self.resource_availability[res_cat]:
+                    resource_warnings.add(res_cat)
+                    print(f"Warning: No available resources for {res_cat} for task {tid}.", file=sys.stderr)
+                    continue
                 
+                # Get available resources of this type
+                available_resources = self.resource_availability[res_cat]
+                
+                # Check if we have enough resources of this type
+                if count > len(available_resources):
+                    print(f"Warning: Task {tid} requires {count} of resource {res_cat}, but only {len(available_resources)} available.", file=sys.stderr)
+                    # Adjust the demand to the maximum available to ensure feasibility
+                    count = len(available_resources)
+                    if count == 0:
+                        print(f"Skipping resource assignment for Task {tid}, resource type {res_cat} due to no available resources")
+                        continue
+                
+                # Initialize resource tracking for this category if needed
+                if res_cat not in resource_dict:
+                    resource_dict[res_cat] = {'resources': available_resources, 'capacity': len(available_resources)}
+                
+                # Create Boolean variables for resource assignment
+                # For each resource of this type, create a Boolean variable indicating if it's assigned to this task
+                task_resources = []
+                for i, resource in enumerate(available_resources):
+                    # Create a Boolean variable for this resource assignment
+                    var_name = f'resource_{res_cat}_{resource["id"]}_{tid}'
+                    assignment_var = self.model.NewBoolVar(var_name)
+                    
+                    # Store the assignment variable
+                    task_resources.append(assignment_var)
+                    
+                    # If this resource is assigned to this task, add its interval to the resource's intervals
+                    # This ensures the resource isn't double-booked
+                    resource_interval = self.model.NewOptionalIntervalVar(
+                        self.task_vars[tid]['start'],
+                        task['duration'],  # Use the task duration directly from the task data
+                        self.task_vars[tid]['end'],
+                        assignment_var,
+                        f'resource_interval_{res_cat}_{resource["id"]}_{tid}'
+                    )
+                    resource['intervals'].append(resource_interval)
+                
+                # Ensure exactly 'count' resources are assigned to this task
+                self.model.Add(sum(task_resources) == count)
+                
+                # Store the assignment variables for later extraction
+                self.resource_assignments[tid][res_cat] = {
+                    'count': count,
+                    'assignment_vars': list(zip(available_resources, task_resources))
+                }
+                
+                print(f"  Added constraint: Task {tid} must use exactly {count} resources of type {res_cat}")
+                print(f"  Stored {len(task_resources)} resource assignment variables for Task {tid}, type {res_cat}")
+        
+        # Second pass: ensure no resource is double-booked
+        for res_cat, data in resource_dict.items():
+            for resource in data['resources']:
+                # If this resource has multiple intervals, ensure they don't overlap
+                if len(resource['intervals']) > 1:
+                    self.model.AddNoOverlap(resource['intervals'])
+            
+            status = " (WARNING: insufficient resources available)" if res_cat in resource_warnings else ""
+            print(f"Added integrated resource constraints for {res_cat}: capacity = {data['capacity']}{status}", file=sys.stderr)
+
+    def _add_integrated_employee_constraints(self):
+        """
+        Build employee constraints with integrated employee assignment.
+        This ensures that specific employees are assigned to tasks during scheduling.
+        """
+        employee_dict = {}
+        employee_warnings = set()  # Track which employee groups have warnings
+        
+        # Initialize employee assignments for each task
+        for task in self.tasks:
+            tid = task['task_id']
+            self.employee_assignments[tid] = {}
+        
+        # First pass: collect employee requirements and check availability
+        print(f"Processing {len(self.tasks)} tasks for employee assignment")
+        processed_tasks = 0
+        tasks_with_employees = 0
+        
+        # Count tasks with employee requirements and print details
+        print("\nDetailed employee requirements by task:")
+        for task in self.tasks:
+            tid = task['task_id']
+            if 'employees' in task and task['employees']:
+                tasks_with_employees += 1
+                print(f"  Task {tid} ({task['name']}) requires:")
+                for group, count in task['employees'].items():
+                    print(f"    - {count} employees of group '{group}'")
+            else:
+                print(f"  Task {tid} ({task['name']}) has no employee requirements")
+        
+        print(f"\nFound {tasks_with_employees} tasks with employee requirements")
+        
+        for task in self.tasks:
+            tid = task['task_id']
+            if 'employees' not in task or not task['employees']:
+                print(f"Task {tid} has no employee requirements, skipping employee assignment")
+                continue
+                
+            processed_tasks += 1
+            print(f"Processing employee requirements for Task {tid}: {task['employees']} ({processed_tasks}/{tasks_with_employees})")
+            
+            for group, count in task['employees'].items():
+                # Convert group to lowercase for case-insensitive matching
+                group_lower = group.lower() if group else None
+                
+                # Skip if no employees of this group are available
+                if group_lower not in self.employee_availability or not self.employee_availability[group_lower]:
+                    employee_warnings.add(group)
+                    print(f"Warning: No available employees for group {group} (as '{group_lower}') for task {tid}.", file=sys.stderr)
+                    continue
+                
+                # Get available employees of this group
+                available_employees = self.employee_availability[group_lower]
+                
+                # Check if we have enough employees of this group
+                if count > len(available_employees):
+                    print(f"Warning: Task {tid} requires {count} employees of group {group}, but only {len(available_employees)} available.", file=sys.stderr)
+                    # Adjust the demand to the maximum available to ensure feasibility
+                    count = len(available_employees)
+                    if count == 0:
+                        print(f"Skipping employee assignment for Task {tid}, group {group} due to no available employees")
+                        continue
+                
+                # Initialize employee tracking for this group if needed
+                if group_lower not in employee_dict:
+                    employee_dict[group_lower] = {'employees': available_employees, 'capacity': len(available_employees)}
+                
+                # Create Boolean variables for employee assignment
+                # For each employee of this group, create a Boolean variable indicating if they're assigned to this task
+                task_employees = []
+                for i, employee in enumerate(available_employees):
+                    # Create a Boolean variable for this employee assignment
+                    var_name = f'employee_{group_lower}_{employee["id"]}_{tid}'
+                    assignment_var = self.model.NewBoolVar(var_name)
+                    
+                    # Store the assignment variable
+                    task_employees.append(assignment_var)
+                    
+                    # If this employee is assigned to this task, add its interval to the employee's intervals
+                    # This ensures the employee isn't double-booked
+                    employee_interval = self.model.NewOptionalIntervalVar(
+                        self.task_vars[tid]['start'],
+                        task['duration'],  # Use the task duration directly from the task data
+                        self.task_vars[tid]['end'],
+                        assignment_var,
+                        f'employee_interval_{group_lower}_{employee["id"]}_{tid}'
+                    )
+                    employee['intervals'].append(employee_interval)
+                
+                # Ensure exactly 'count' employees are assigned to this task
+                constraint = self.model.Add(sum(task_employees) == count)
+                
+                # Store the assignment variables for later extraction
+                self.employee_assignments[tid][group_lower] = {
+                    'count': count,
+                    'original_group': group,  # Keep original group name for display
+                    'assignment_vars': list(zip(available_employees, task_employees)),
+                    'constraint': constraint
+                }
+                
+                print(f"  Added constraint: Task {tid} must use exactly {count} employees of group {group}")
+                print(f"  Stored {len(task_employees)} employee assignment variables for Task {tid}, group {group}")
+                
+                # Print the available employees for this group
+                print(f"  Available employees for group {group}:")
+                for i, employee in enumerate(available_employees):
+                    print(f"    {i+1}. {employee['name']} (ID: {employee['id']})")
+        
+        # Second pass: ensure no employee is double-booked
+        for group, data in employee_dict.items():
+            for employee in data['employees']:
+                # If this employee has multiple intervals, ensure they don't overlap
+                if len(employee['intervals']) > 1:
+                    self.model.AddNoOverlap(employee['intervals'])
+            
+            # Use the original group name for display if available
+            try:
+                original_group = None
+                for task in self.tasks:
+                    if 'employees' in task and task['employees']:
+                        for g in task['employees'].keys():
+                            if g.lower() == group.lower():
+                                original_group = g
+                                break
+                        if original_group:
+                            break
+                
+                if not original_group:
+                    original_group = group
+                
+                status = " (WARNING: insufficient employees available)" if group in employee_warnings else ""
+                print(f"Added integrated employee constraints for {original_group} (as '{group}'): capacity = {data['capacity']}{status}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error displaying employee constraints: {e}", file=sys.stderr)
+                print(f"Added integrated employee constraints for {group}: capacity = {data['capacity']}", file=sys.stderr)
+                
+    def _load_resources_and_employees(self):
+        """
+        Load all available resources and employees from the database.
+        This information will be used for integrated resource assignment during scheduling.
+        """
+        print("Loading resources and employees from database...")
+        conn = self.db.conn
+        cur = conn.cursor()
+        
+        # Load resources
+        try:
+            # Check if type column exists in resources table
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'resources' AND column_name = 'type'
+                ) as exists
+            """)
+            has_type = cur.fetchone()[0]
+            
+            # Get all resources with appropriate columns
+            if has_type:
+                # First, get all unique resource types from task requirements
+                resource_types_needed = set()
+                for task in self.tasks:
+                    if 'resources' in task:
+                        resource_types_needed.update(task['resources'].keys())
+                
+                print(f"Resource types needed by tasks: {resource_types_needed}")
+                
+                # Get all resources
+                cur.execute("SELECT resource_id, name, type, availability FROM resources")
+                resources = cur.fetchall()
+                print(f"Found {len(resources)} resources in the database")
+                
+                # Process resources
+                for resource in resources:
+                    resource_id, name, resource_type, availability = resource
+                    # Only include available resources
+                    if availability:
+                        if resource_type not in self.resource_availability:
+                            self.resource_availability[resource_type] = []
+                        self.resource_availability[resource_type].append({
+                            'id': resource_id,
+                            'name': name,
+                            'intervals': []  # Will store interval variables when this resource is used
+                        })
+                        print(f"Loaded resource: {name} (ID: {resource_id}, Type: {resource_type})")
+                
+                # Check if we have resources for all needed types
+                for res_type in resource_types_needed:
+                    if res_type not in self.resource_availability or not self.resource_availability[res_type]:
+                        print(f"WARNING: No available resources found for type '{res_type}' which is needed by tasks")
+            else:
+                print("Warning: 'type' column does not exist in resources table")
+        except Exception as e:
+            print(f"Error loading resources: {e}", file=sys.stderr)
+        
+        # Load employees
+        try:
+            # Check if skill_set column exists in employees table
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'employees' AND column_name = 'skill_set'
+                ) as exists
+            """)
+            has_skill_set = cur.fetchone()[0]
+            
+            # Get all employees with appropriate columns
+            if has_skill_set:
+                # First, get all unique employee groups from task requirements
+                employee_groups_needed = set()
+                for task in self.tasks:
+                    if 'employees' in task:
+                        employee_groups_needed.update(task['employees'].keys())
+                
+                print(f"Employee groups needed by tasks: {employee_groups_needed}")
+                
+                # Get all employees
+                cur.execute("SELECT employee_id, name, skill_set FROM employees")
+                employees = cur.fetchall()
+                print(f"Found {len(employees)} employees in the database")
+                
+                # Process employees
+                for employee in employees:
+                    employee_id, name, skill_set = employee
+                    # Convert skill_set to lowercase for case-insensitive matching
+                    skill_set_lower = skill_set.lower() if skill_set else None
+                    
+                    if skill_set_lower not in self.employee_availability:
+                        self.employee_availability[skill_set_lower] = []
+                    self.employee_availability[skill_set_lower].append({
+                        'id': employee_id,
+                        'name': name,
+                        'skill_set_original': skill_set,  # Keep original for display
+                        'intervals': []  # Will store interval variables when this employee is used
+                    })
+                    print(f"Loaded employee: {name} (ID: {employee_id}, Skill: {skill_set} (stored as '{skill_set_lower}')")
+                
+                # Check if we have employees for all needed groups
+                for group in employee_groups_needed:
+                    # Convert group to lowercase for case-insensitive matching
+                    group_lower = group.lower() if group else None
+                    if group_lower not in self.employee_availability:
+                        print(f"WARNING: No available employees found for group '{group}' (as '{group_lower}') which is needed by tasks")
+                    elif not self.employee_availability[group_lower]:
+                        print(f"WARNING: Group '{group}' (as '{group_lower}') exists but has no available employees")
+                    else:
+                        print(f"Group '{group}' (as '{group_lower}') has {len(self.employee_availability[group_lower])} available employees:")
+                        for emp in self.employee_availability[group_lower]:
+                            print(f"  - {emp['name']} (ID: {emp['id']}) - Original skill: {emp.get('skill_set_original', 'Unknown')}")
+            else:
+                print("Warning: 'skill_set' column does not exist in employees table")
+        except Exception as e:
+            print(f"Error loading employees: {e}", file=sys.stderr)
+        
+        # Print summary of loaded resources and employees
+        print("\nResource availability summary:")
+        for res_type, resources in self.resource_availability.items():
+            print(f"  {res_type}: {len(resources)} resources available")
+        
+        print("\nEmployee availability summary:")
+        for skill, employees in self.employee_availability.items():
+            print(f"  {skill}: {len(employees)} employees available")
+        
+        cur.close()
+        
     def _load_preserved_tasks(self):
         """
         Load the current schedule for preserved tasks from the database.
@@ -1349,8 +1695,49 @@ def cp_sat_scheduler(preserve_task_ids=None):
         preserve_task_ids: Optional list of task IDs to preserve (not reschedule)
                           These tasks will keep their current schedule
     """
+    print(f"Connecting to database with parameters: {DB_PARAMS}")
     db = DatabaseManager()
+    
     try:
+        # Check database connection and tables
+        conn = db.conn
+        cur = conn.cursor()
+        
+        # List all tables in the database
+        cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';")
+        tables = [row[0] for row in cur.fetchall()]
+        print(f"Tables in database: {tables}")
+        
+        # Check employees table
+        if 'employees' in tables:
+            cur.execute("SELECT COUNT(*) FROM employees;")
+            employee_count = cur.fetchone()[0]
+            print(f"Found {employee_count} employees in the database")
+            
+            # Show employee data
+            cur.execute("SELECT * FROM employees;")
+            employees = cur.fetchall()
+            print("Employee data:")
+            for emp in employees:
+                print(f"  {emp}")
+        else:
+            print("WARNING: 'employees' table not found in database")
+            
+        # Check task_required_employees table
+        if 'task_required_employees' in tables:
+            cur.execute("SELECT COUNT(*) FROM task_required_employees;")
+            req_count = cur.fetchone()[0]
+            print(f"Found {req_count} employee requirements in the database")
+            
+            # Show requirement data
+            cur.execute("SELECT * FROM task_required_employees;")
+            requirements = cur.fetchall()
+            print("Employee requirements:")
+            for req in requirements:
+                print(f"  {req}")
+        else:
+            print("WARNING: 'task_required_employees' table not found in database")
+        
         print("Loading tasks...")
         tasks = db.get_tasks()
         if not tasks:
@@ -1368,7 +1755,28 @@ def cp_sat_scheduler(preserve_task_ids=None):
             
         # Exclude tasks with missing phase
         tasks = [t for t in tasks if t['phase'] is not None]
-        print("Building scheduling model...")
+        print(f"Building scheduling model for {len(tasks)} tasks...")
+        
+        # Print task IDs being processed
+        task_ids = [t['task_id'] for t in tasks]
+        print(f"Task IDs being processed: {task_ids}")
+        
+        # Check if tasks have resource and employee requirements
+        tasks_with_resources = sum(1 for t in tasks if t['resources'])
+        tasks_with_employees = sum(1 for t in tasks if t['employees'])
+        print(f"Tasks with resource requirements: {tasks_with_resources} out of {len(tasks)}")
+        print(f"Tasks with employee requirements: {tasks_with_employees} out of {len(tasks)}")
+        
+        # Print details of tasks with requirements
+        print("\nTasks with resource requirements:")
+        for t in tasks:
+            if t['resources']:
+                print(f"  Task {t['task_id']} ({t['name']}): {t['resources']}")
+        
+        print("\nTasks with employee requirements:")
+        for t in tasks:
+            if t['employees']:
+                print(f"  Task {t['task_id']} ({t['name']}): {t['employees']}")
         scheduler = ConstructionScheduler(tasks, db, preserve_task_ids=preserve_task_ids)
         
         # Create a solution callback to track progress and implement early stopping
@@ -1418,15 +1826,82 @@ def cp_sat_scheduler(preserve_task_ids=None):
         print(f"Status: {solver.StatusName(status)}")
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             schedule = []
+            resource_assignments = []
+            employee_assignments = []
+            
             for task in tasks:
                 tid = task['task_id']
                 start_val = solver.Value(scheduler.task_vars[tid]['start'])
                 end_val = solver.Value(scheduler.task_vars[tid]['end'])
+                
+                # Add task to schedule
                 schedule.append({
                     'task_id': tid,
                     'start': start_val,
                     'duration': end_val - start_val
                 })
+                
+                # Extract resource assignments for this task
+                if tid in scheduler.resource_assignments:
+                    print(f"Checking resource assignments for Task {tid}")
+                    if not scheduler.resource_assignments[tid]:
+                        print(f"  No resource categories found for Task {tid}")
+                    
+                    for res_cat, assignment_data in scheduler.resource_assignments[tid].items():
+                        print(f"  Resource category: {res_cat}, required count: {assignment_data['count']}")
+                        assigned_count = 0
+                        
+                        for resource, assignment_var in assignment_data['assignment_vars']:
+                            # Check if this resource is assigned to this task
+                            is_assigned = solver.Value(assignment_var) == 1
+                            if is_assigned:
+                                assigned_count += 1
+                                resource_assignments.append({
+                                    'task_id': tid,
+                                    'resource_id': resource['id'],
+                                    'resource_name': resource['name'],
+                                    'resource_type': res_cat
+                                })
+                                print(f"  Resource assigned: {resource['name']} (ID: {resource['id']}, Type: {res_cat}) to Task {tid}")
+                        
+                        print(f"  Total resources assigned for {res_cat}: {assigned_count} of {assignment_data['count']} required")
+                else:
+                    print(f"Task {tid} not found in resource_assignments dictionary")
+                
+                # Extract employee assignments for this task
+                if tid in scheduler.employee_assignments:
+                    print(f"Checking employee assignments for Task {tid}")
+                    if not scheduler.employee_assignments[tid]:
+                        print(f"  No employee groups found for Task {tid}")
+                    
+                    for group, assignment_data in scheduler.employee_assignments[tid].items():
+                        print(f"  Employee group: {group}, required count: {assignment_data['count']}")
+                        assigned_count = 0
+                        
+                        # Print all assignment variables for debugging
+                        print(f"  Checking {len(assignment_data['assignment_vars'])} employee assignment variables")
+                        
+                        for i, (employee, assignment_var) in enumerate(assignment_data['assignment_vars']):
+                            # Check if this employee is assigned to this task
+                            var_value = solver.Value(assignment_var)
+                            is_assigned = var_value == 1
+                            
+                            print(f"    Employee {employee['name']} (ID: {employee['id']}): Assignment var = {var_value}")
+                            
+                            if is_assigned:
+                                assigned_count += 1
+                                employee_assignments.append({
+                                    'task_id': tid,
+                                    'employee_id': employee['id'],
+                                    'employee_name': employee['name'],
+                                    'skill_set': group
+                                })
+                                print(f"  Employee assigned: {employee['name']} (ID: {employee['id']}, Skill: {group}) to Task {tid}")
+                        
+                        print(f"  Total employees assigned for {group}: {assigned_count} of {assignment_data['count']} required")
+                else:
+                    print(f"Task {tid} not found in employee_assignments dictionary")
+                
                 print(f"Task {tid} ({task['name']}): Start at {working_time_to_datetime(start_val)}, End at {working_time_to_datetime(end_val)}")
             
             total_makespan = solver.Value(scheduler.makespan) / SCALE_FACTOR
@@ -1438,10 +1913,35 @@ def cp_sat_scheduler(preserve_task_ids=None):
             print("Updating schedule in database...")
             db.update_schedule(schedule, preserve_task_ids)
             
-            # Assign resources and employees to tasks
-            print("Assigning resources and employees to tasks...")
-            # Call auto_assign_resources_to_tasks instead, which now supports preserve_task_ids
-            auto_assign_resources_to_tasks(preserve_task_ids)
+            # Save resource and employee assignments to database
+            print("Saving resource and employee assignments to database...")
+            
+            # Check if we have assignments for all tasks with requirements
+            tasks_with_resources = sum(1 for t in tasks if t['resources'])
+            tasks_with_employees = sum(1 for t in tasks if t['employees'])
+            
+            resource_task_ids = set(a['task_id'] for a in resource_assignments)
+            employee_task_ids = set(a['task_id'] for a in employee_assignments)
+            
+            print(f"\nAssignment coverage:")
+            print(f"  Tasks with resource requirements: {tasks_with_resources}")
+            print(f"  Tasks with resource assignments: {len(resource_task_ids)}")
+            print(f"  Tasks with employee requirements: {tasks_with_employees}")
+            print(f"  Tasks with employee assignments: {len(employee_task_ids)}")
+            
+            # Find tasks with requirements but no assignments
+            tasks_missing_resources = [t['task_id'] for t in tasks if t['resources'] and t['task_id'] not in resource_task_ids]
+            tasks_missing_employees = [t['task_id'] for t in tasks if t['employees'] and t['task_id'] not in employee_task_ids]
+            
+            if tasks_missing_resources:
+                print(f"\nWARNING: {len(tasks_missing_resources)} tasks have resource requirements but no assignments:")
+                print(f"  Task IDs: {tasks_missing_resources}")
+            
+            if tasks_missing_employees:
+                print(f"\nWARNING: {len(tasks_missing_employees)} tasks have employee requirements but no assignments:")
+                print(f"  Task IDs: {tasks_missing_employees}")
+            
+            save_assignments_to_database(db, resource_assignments, employee_assignments, preserve_task_ids, tasks)
         else:
             print("No feasible schedule found. Check constraints and resource/employee availability.", file=sys.stderr)
     except Exception as e:
@@ -1450,6 +1950,251 @@ def cp_sat_scheduler(preserve_task_ids=None):
         traceback.print_exc()
     finally:
         db.close()
+
+def save_assignments_to_database(db, resource_assignments, employee_assignments, preserve_task_ids=None, tasks=None):
+    """
+    Save the resource and employee assignments to the database.
+    
+    Args:
+        db: DatabaseManager instance
+        resource_assignments: List of resource assignment dictionaries
+        employee_assignments: List of employee assignment dictionaries
+        preserve_task_ids: Optional list of task IDs to preserve (not reassign)
+        tasks: List of task dictionaries (for debugging)
+    """
+    print(f"\nSaving assignments to database:")
+    print(f"  Resource assignments: {len(resource_assignments)}")
+    print(f"  Employee assignments: {len(employee_assignments)}")
+    
+    # Print task IDs with assignments
+    resource_task_ids = sorted(set(a['task_id'] for a in resource_assignments))
+    employee_task_ids = sorted(set(a['task_id'] for a in employee_assignments))
+    
+    print(f"  Tasks with resource assignments: {len(resource_task_ids)}")
+    print(f"  Tasks with employee assignments: {len(employee_task_ids)}")
+    
+    print(f"  Resource assignment task IDs: {resource_task_ids}")
+    print(f"  Employee assignment task IDs: {employee_task_ids}")
+    
+    # Check for tasks with requirements but no assignments
+    if tasks:
+        tasks_with_employee_reqs = [t for t in tasks if t['employees']]
+        tasks_with_resource_reqs = [t for t in tasks if t['resources']]
+        
+        print(f"\nTask requirement coverage:")
+        print(f"  Tasks with employee requirements: {len(tasks_with_employee_reqs)}")
+        print(f"  Tasks with resource requirements: {len(tasks_with_resource_reqs)}")
+        
+        missing_employee_assignments = [t['task_id'] for t in tasks_with_employee_reqs if t['task_id'] not in employee_task_ids]
+        missing_resource_assignments = [t['task_id'] for t in tasks_with_resource_reqs if t['task_id'] not in resource_task_ids]
+        
+        if missing_employee_assignments:
+            print(f"  WARNING: {len(missing_employee_assignments)} tasks have employee requirements but no assignments:")
+            print(f"    Task IDs: {missing_employee_assignments}")
+            
+            # Print details of missing employee assignments
+            print("\n  Details of tasks missing employee assignments:")
+            for tid in missing_employee_assignments:
+                task = next((t for t in tasks if t['task_id'] == tid), None)
+                if task:
+                    print(f"    Task {tid} ({task['name']}) requires:")
+                    for group, count in task['employees'].items():
+                        print(f"      - {count} employees of group '{group}'")
+        
+        if missing_resource_assignments:
+            print(f"  WARNING: {len(missing_resource_assignments)} tasks have resource requirements but no assignments:")
+            print(f"    Task IDs: {missing_resource_assignments}")
+    
+    preserve_task_ids = preserve_task_ids or []
+    
+    try:
+        cur = db.conn.cursor()
+        
+        # Clear existing assignments if needed (except for preserved tasks)
+        if preserve_task_ids:
+            task_ids_str = ','.join(str(tid) for tid in preserve_task_ids)
+            if task_ids_str:
+                try:
+                    cur.execute(f"""
+                        DELETE FROM employee_assignments 
+                        WHERE task_id NOT IN ({task_ids_str})
+                    """)
+                    print(f"Deleted {cur.rowcount} employee assignments for non-preserved tasks")
+                    
+                    cur.execute(f"""
+                        DELETE FROM resource_assignments 
+                        WHERE task_id NOT IN ({task_ids_str})
+                    """)
+                    print(f"Deleted {cur.rowcount} resource assignments for non-preserved tasks")
+                    
+                    db.conn.commit()
+                    print("Cleared existing assignments for non-preserved tasks")
+                except Exception as e:
+                    print(f"Error clearing existing assignments: {e}")
+                    db.conn.rollback()
+        else:
+            # Clear all assignments
+            try:
+                cur.execute("DELETE FROM employee_assignments")
+                print(f"Deleted {cur.rowcount} employee assignments")
+                
+                cur.execute("DELETE FROM resource_assignments")
+                print(f"Deleted {cur.rowcount} resource assignments")
+                
+                db.conn.commit()
+                print("Cleared all existing assignments")
+            except Exception as e:
+                print(f"Error clearing all assignments: {e}")
+                db.conn.rollback()
+        
+        # Check if employee_assignments table exists
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'employee_assignments'
+            ) as exists
+        """)
+        
+        result = cur.fetchone()
+        employee_table_exists = result[0]
+        
+        if not employee_table_exists:
+            # Create the employee_assignments table
+            cur.execute("""
+                CREATE TABLE employee_assignments (
+                    assignment_id SERIAL PRIMARY KEY,
+                    task_id INTEGER NOT NULL,
+                    employee_id INTEGER NOT NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+                    UNIQUE (task_id, employee_id),
+                    FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+                )
+            """)
+            db.conn.commit()
+        
+        # Check if resource_assignments table exists
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'resource_assignments'
+            ) as exists
+        """)
+        
+        result = cur.fetchone()
+        resource_table_exists = result[0]
+        
+        if not resource_table_exists:
+            # Create the resource_assignments table
+            cur.execute("""
+                CREATE TABLE resource_assignments (
+                    assignment_id SERIAL PRIMARY KEY,
+                    task_id INTEGER NOT NULL,
+                    resource_id INTEGER NOT NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+                    UNIQUE (task_id, resource_id),
+                    FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+                )
+            """)
+            db.conn.commit()
+        
+        # Insert resource assignments
+        print("\nInserting resource assignments:")
+        successful_resource_assignments = 0
+        
+        for assignment in resource_assignments:
+            task_id = assignment['task_id']
+            resource_id = assignment['resource_id']
+            
+            # Skip if this task should be preserved
+            if task_id in preserve_task_ids:
+                print(f"  Skipping resource assignment for preserved task {task_id}")
+                continue
+                
+            # Check if assignment already exists
+            cur.execute("SELECT COUNT(*) FROM resource_assignments WHERE task_id = %s AND resource_id = %s", 
+                       (task_id, resource_id))
+            already_exists = cur.fetchone()[0] > 0
+            
+            if already_exists:
+                print(f"  Resource assignment already exists: Resource {assignment['resource_name']} (ID: {resource_id}) to task {task_id}")
+            else:
+                try:
+                    cur.execute("""
+                        INSERT INTO resource_assignments (task_id, resource_id)
+                        VALUES (%s, %s)
+                    """, (task_id, resource_id))
+                    successful_resource_assignments += 1
+                    print(f"  Assigned resource {assignment['resource_name']} (ID: {resource_id}) to task {task_id}")
+                except Exception as e:
+                    print(f"  Error inserting resource assignment: {e}")
+        
+        print(f"Successfully inserted {successful_resource_assignments} resource assignments")
+        
+        # Insert employee assignments
+        print("\nInserting employee assignments:")
+        successful_employee_assignments = 0
+        
+        for assignment in employee_assignments:
+            task_id = assignment['task_id']
+            employee_id = assignment['employee_id']
+            
+            # Skip if this task should be preserved
+            if task_id in preserve_task_ids:
+                print(f"  Skipping employee assignment for preserved task {task_id}")
+                continue
+                
+            # Check if assignment already exists
+            cur.execute("SELECT COUNT(*) FROM employee_assignments WHERE task_id = %s AND employee_id = %s", 
+                       (task_id, employee_id))
+            already_exists = cur.fetchone()[0] > 0
+            
+            if already_exists:
+                print(f"  Employee assignment already exists: Employee {assignment['employee_name']} (ID: {employee_id}) to task {task_id}")
+            else:
+                try:
+                    # Check if is_initial and is_modified columns exist
+                    cur.execute("""
+                        SELECT 
+                            COUNT(*) as count,
+                            SUM(CASE WHEN column_name = 'is_initial' THEN 1 ELSE 0 END) as has_is_initial,
+                            SUM(CASE WHEN column_name = 'is_modified' THEN 1 ELSE 0 END) as has_is_modified
+                        FROM information_schema.columns 
+                        WHERE table_name = 'employee_assignments'
+                    """)
+                    
+                    result = cur.fetchone()
+                    table_exists = result[0] > 0
+                    has_is_initial = result[1] > 0
+                    has_is_modified = result[2] > 0
+                    
+                    if table_exists and has_is_initial and has_is_modified:
+                        # Use full insert with all columns
+                        cur.execute("""
+                            INSERT INTO employee_assignments (task_id, employee_id, is_initial, is_modified)
+                            VALUES (%s, %s, TRUE, FALSE)
+                        """, (task_id, employee_id))
+                    else:
+                        # Use simplified insert with only required columns
+                        cur.execute("""
+                            INSERT INTO employee_assignments (task_id, employee_id)
+                            VALUES (%s, %s)
+                        """, (task_id, employee_id))
+                    
+                    successful_employee_assignments += 1
+                    print(f"  Assigned employee {assignment['employee_name']} (ID: {employee_id}) to task {task_id}")
+                except Exception as e:
+                    print(f"  Error inserting employee assignment: {e}")
+        
+        print(f"Successfully inserted {successful_employee_assignments} employee assignments")
+        
+        db.conn.commit()
+        print("Successfully saved all assignments to database")
+        
+    except Exception as e:
+        print(f"Error saving assignments to database: {e}")
+        db.conn.rollback()
+    finally:
+        cur.close()
 
 def auto_assign_resources_to_tasks(preserve_task_ids=None, clear_existing=True):
     """
@@ -2776,6 +3521,6 @@ def adjust_to_working_hours(time_dt):
 # Main Execution
 # ---------------------------
 if __name__ == '__main__':
-    print("Running CP-SAT scheduler (working-hours only domain)...")
+    print("Running integrated CP-SAT scheduler with resource assignment (working-hours only domain)...")
     cp_sat_scheduler()
     
